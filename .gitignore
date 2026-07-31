@@ -41,3 +41,6 @@ web/firebase-service-account.json
 **/firebase-service-account*.json
 google-services.json
 GoogleService-Info.plist
+
+# El panel admin web es un proyecto/repo aparte, no se trackea desde acá
+/web/

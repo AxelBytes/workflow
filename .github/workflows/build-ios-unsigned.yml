@@ -34,9 +34,18 @@ jobs:
       - name: Expo prebuild (genera carpeta ios/)
         run: npx expo prebuild --platform ios --no-install
 
+      - name: Patch Podfile para habilitar modular headers
+        working-directory: ios
+        run: |
+          if ! grep -q "use_modular_headers!" Podfile 2>/dev/null; then
+            perl -0777 -pe 's/(platform :ios.*\n)/$1use_modular_headers!\n/' -i Podfile || echo "use_modular_headers!" >> Podfile
+          fi
+          echo "Podfile parcheado:"
+          sed -n '1,120p' Podfile
+
       - name: Pod install
         working-directory: ios
-        run: pod install
+        run: pod install --repo-update
 
       - name: Detectar workspace y scheme
         id: detect
