@@ -5,14 +5,17 @@ import { useAuth } from './useAuth';
 import { ADMIN_EMAIL } from '../constants/admin';
 
 export const useNotifications = () => {
-  const notificationListener = useRef<Notifications.Subscription>();
-  const responseListener = useRef<Notifications.Subscription>();
+  const notificationListener = useRef<Notifications.Subscription | undefined>(undefined);
+  const responseListener = useRef<Notifications.Subscription | undefined>(undefined);
   const { user } = useAuth();
 
   useEffect(() => {
-    // Registrar para notificaciones push
+    // Registrar para notificaciones push (no logueamos el token: es sensible,
+    // permite enviarle notificaciones al dispositivo si se filtra en logs)
     notificationService.registerForPushNotificationsAsync().then(token => {
-      console.log('Token de notificación:', token);
+      if (__DEV__) {
+        console.log('Token de notificación registrado:', token ? 'OK' : 'no disponible');
+      }
     });
 
     // Listener para notificaciones recibidas
@@ -41,12 +44,8 @@ export const useNotifications = () => {
 
     return () => {
       // Limpiar listeners
-      if (notificationListener.current) {
-        Notifications.removeNotificationSubscription(notificationListener.current);
-      }
-      if (responseListener.current) {
-        Notifications.removeNotificationSubscription(responseListener.current);
-      }
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
     };
   }, []);
 

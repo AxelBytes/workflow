@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useNotifications } from '../hooks/useNotifications';
+import { useAppSecurity } from '../hooks/useAppSecurity';
 import { firebaseSyncService } from '../lib/firebaseSync';
 import { useProductStore } from '../store/productStore';
 import { AuthProvider, useAuthContext } from '../contexts/AuthContext';
@@ -12,6 +13,9 @@ function RootLayoutContent() {
   const { isAuthenticated, isLoading: authLoading } = useAuthContext();
   const router = useRouter();
   const segments = useSegments();
+
+  // Verificar seguridad del entorno (root, emulador, tampering)
+  useAppSecurity();
 
   // Inicializar notificaciones
   useNotifications();
@@ -94,6 +98,8 @@ function RootLayoutContent() {
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="privacy-security" options={{ headerShown: false }} />
+        <Stack.Screen name="help-support" options={{ headerShown: false }} />
       </Stack>
     </>
   );

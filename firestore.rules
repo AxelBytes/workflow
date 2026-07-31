@@ -1,0 +1,182 @@
+rules_version = '2';
+
+/**
+ * Reglas de seguridad de Firestore — Eclipse Loyalty Engine
+ *
+ * IMPORTANTE — historial: la primera versión de este archivo (nunca desplegada)
+ * bloqueaba por defecto casi todo, asumiendo que TODA escritura pasaba por las
+ * API routes de Next.js. Una auditoría posterior encontró que el panel web
+ * también escribe productos, sorteos, cajeros y participantes de sorteo
+ * DIRECTAMENTE con el SDK cliente de Firestore (`web/lib/firebase/firestore.ts`,
+ * `lib/firebaseSync.ts` en la app), sin pasar por ninguna API. Si se hubiera
+ * desplegado la versión original, esos flujos se habrían roto en producción.
+ * Esta versión refleja el comportamiento real y agrega permisos donde hacían
+ * falta, pero SIEMPRE dejando fuera del alcance del cliente los campos que
+ * mueven dinero/puntos (totalPoints, transacciones, canjes, tokens).
+ *
+ * Regla general: si algo puede mover puntos o dinero, el cliente NO puede
+ * tocarlo directo — solo lectura de lo propio. Lo demás (catálogo, sorteos,
+ * gestión de cajeros/productos) se permite a admin, y algunas acciones
+ * puntuales de cliente (participar en sorteo, actualizar su propio perfil)
+ * se permiten con validación de campos.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function role() {
+      return isSignedIn() ? request.auth.token.role : null;
+    }
+
+    function isAdmin() {
+      return role() == 'admin';
+    }
+
+    function isStaff() {
+      return role() == 'admin' || role() == 'cashier';
+    }
+
+    function ownEmail() {
+      return isSignedIn() ? request.auth.token.email : null;
+    }
+
+    // Campos de "customers" que el cliente (app móvil) puede tocar desde su
+    // propio documento ya existente. Todo lo demás (totalPoints, dni, linked,
+    // uid, source, mergedFromId, nameEditable...) queda fuera del alcance del
+    // cliente y solo se modifica vía Admin SDK.
+    function onlyEditsAllowedCustomerFields() {
+      let allowed = ['email', 'phone', 'name', 'firstName', 'lastName', 'lastActivity'];
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowed);
+    }
+
+    // El nombre solo es editable para cuentas creadas con Google (nameEditable
+    // == true en el documento ya existente). Los registros por formulario tienen
+    // nameEditable == false y la UI ya no muestra el campo, pero sin esto
+    // cualquiera podía saltarse esa regla llamando al SDK directo (devtools).
+    function isTouchingNameFields() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny(['name', 'firstName', 'lastName']);
+    }
+
+    function nameEditAllowed() {
+      return !isTouchingNameFields() || resource.data.nameEditable == true;
+    }
+
+    // ── Clientes ────────────────────────────────────────────────────────────
+    match /customers/{customerId} {
+      allow read: if isOwner(customerId) || isStaff();
+
+      // Alta desde la app (registro por email/password o Google). El único
+      // campo realmente sensible acá es totalPoints: nunca puede crearse en
+      // un valor distinto de 0 desde el cliente (cargar puntos reales siempre
+      // pasa por /api/points/transaction o /api/customers/link-account, con
+      // el Admin SDK, que no pasa por estas reglas).
+      allow create: if isOwner(customerId)
+        && (!('totalPoints' in request.resource.data) || request.resource.data.totalPoints == 0)
+        && !('mergedFromId' in request.resource.data)
+        && !('mergedToUid' in request.resource.data);
+
+      allow update: if isOwner(customerId) && onlyEditsAllowedCustomerFields() && nameEditAllowed();
+      allow delete: if false;
+    }
+
+    // ── Catálogo de premios / productos ─────────────────────────────────────
+    // Lectura para cualquier usuario logueado (app + panel); alta/edición/baja
+    // solo admin (coincide con el gate "isAdmin()" que ya usa la UI del panel).
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Promociones ──────────────────────────────────────────────────────────
+    // El panel ya crea/edita/borra promos vía /api/promotions (Admin SDK); se
+    // deja además admin-write directo por si algún flujo viejo del cliente lo
+    // usa, pero nunca abierto a clientes comunes.
+    match /promotions/{promoId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Sorteos ──────────────────────────────────────────────────────────────
+    // Alta/edición/baja: solo admin. Participar en un sorteo (que puede tener
+    // costo en puntos) se resuelve 100% vía /api/raffles/participate con el
+    // Admin SDK (valida cupo, evita duplicados y descuenta puntos en una sola
+    // transacción); el cliente ya no escribe currentParticipants directo.
+    match /raffles/{raffleId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Participantes de sorteos: solo lectura desde el cliente (modal de
+    // participantes del admin, chequeo de "ya participás" en la app). El alta
+    // siempre pasa por el endpoint de arriba.
+    match /raffleParticipants/{participantId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── Tokens de notificaciones push (el dueño registra su propio token) ────
+    match /pushTokens/{tokenId} {
+      allow read: if false;
+      allow create, update: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── Personal (admins / cajeros) ───────────────────────────────────────────
+    // El panel resuelve el rol al iniciar sesión consultando `where('email'==
+    // propio email)`; Firestore puede validar ese patrón exacto sin exponer el
+    // resto de la colección. Los admins además pueden listar todo el personal
+    // (pantalla de gestión de cajeros). Alta/baja/activación siempre vía Admin
+    // SDK (/api/create-cashier, /api/update-cashier-status).
+    match /admins/{id} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.email == ownEmail());
+      allow write: if false;
+    }
+
+    match /cashiers/{id} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.email == ownEmail());
+      // Edición de datos (nombre/sucursal/permisos) desde el panel: solo admin,
+      // y solo esos campos — nunca email/isActive (eso es Admin SDK).
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'branch', 'permissions', 'updatedAt']);
+      allow create, delete: if false;
+    }
+
+    // ── Transacciones de puntos (solo lectura de lo propio o staff) ──────────
+    match /pointTransactions/{id} {
+      allow read: if isStaff() || (isSignedIn() && resource.data.customerEmail == ownEmail());
+      allow write: if false;
+    }
+
+    // ── Monitoreo de cajas / métricas (solo staff, siempre generado server-side)
+    match /cashierBoxes/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    match /dashboardMetrics/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // ── Todo lo demás relacionado a canjes/QR/config: solo Admin SDK ─────────
+    match /processedTransactions/{id} { allow read, write: if false; }
+    match /qrTokens/{id} { allow read, write: if false; }
+    match /rewardTokens/{id} { allow read, write: if false; }
+    match /rewardOrders/{id} { allow read, write: if false; }
+    match /notificationLogs/{id} { allow read, write: if false; }
+    match /securityAlerts/{id} { allow read, write: if false; }
+    match /config/{id} { allow read: if isSignedIn(); allow write: if false; }
+
+    // Cualquier colección no listada explícitamente: denegado por defecto.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
@@ -10,6 +11,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -27,7 +30,7 @@ export class NotificationService {
   }
 
   // Registrar el dispositivo para recibir notificaciones Y guardar en Firestore
-  async registerForPushNotificationsAsync(userEmail?: string): Promise<string | null> {
+  async registerForPushNotificationsAsync(userEmail?: string, userId?: string): Promise<string | null> {
     let token;
 
     // En web, no intentamos obtener tokens push
@@ -61,14 +64,18 @@ export class NotificationService {
       }
       
       try {
-        // Obtener token de Expo Push
-        const tokenData = await Notifications.getExpoPushTokenAsync();
-        token = tokenData.data;
-        console.log('📱 Token push obtenido:', token);
+        // projectId requerido en builds EAS / production
+        const projectId =
+          Constants.expoConfig?.extra?.eas?.projectId ??
+          Constants.easConfig?.projectId;
 
-        // Guardar token en Firestore para que la web pueda enviar notificaciones
+        const tokenData = await Notifications.getExpoPushTokenAsync(
+          projectId ? { projectId } : undefined
+        );
+        token = tokenData.data;
+
         if (token) {
-          await this.saveTokenToFirestore(token, userEmail);
+          await this.saveTokenToFirestore(token, userEmail, userId);
         }
       } catch (error) {
         console.log('📱 Error al obtener token push:', error);
@@ -83,21 +90,20 @@ export class NotificationService {
   }
 
   // Guardar token en Firestore
-  private async saveTokenToFirestore(token: string, userEmail?: string): Promise<void> {
+  private async saveTokenToFirestore(token: string, userEmail?: string, userId?: string): Promise<void> {
     try {
-      const tokenId = token.replace(/[^a-zA-Z0-9]/g, '_'); // Sanitizar para usar como ID
+      const tokenId = token.replace(/[^a-zA-Z0-9]/g, '_');
       const tokenRef = doc(db, 'pushTokens', tokenId);
       
       await setDoc(tokenRef, {
         token,
         email: userEmail || 'anonymous',
+        userId: userId || null,   // ← campo que usan las notificaciones dirigidas
         platform: Platform.OS,
         isActive: true,
         createdAt: serverTimestamp(),
         lastUsed: serverTimestamp(),
       }, { merge: true });
-
-      console.log('✅ Token guardado en Firestore');
     } catch (error) {
       console.error('❌ Error al guardar token en Firestore:', error);
     }

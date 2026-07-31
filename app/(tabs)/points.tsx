@@ -110,6 +110,24 @@ export default function PointsScreen() {
           </View>
         </View>
 
+        {/* Botón canjear premio */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.redeemBanner}
+            onPress={() => router.push('/scan-reward')}
+            activeOpacity={0.85}
+          >
+            <View style={styles.redeemBannerLeft}>
+              <Gift size={32} color={COLORS.white} />
+              <View>
+                <Text style={styles.redeemBannerTitle}>Canjear un Premio</Text>
+                <Text style={styles.redeemBannerSub}>Escaneá el QR del cajero</Text>
+              </View>
+            </View>
+            <Text style={styles.redeemBannerArrow}>›</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Cómo funcionan los puntos */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>¿Cómo funcionan?</Text>
@@ -426,5 +444,39 @@ const styles = StyleSheet.create({
   transactionAmount: {
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  redeemBanner: {
+    backgroundColor: COLORS.orange,
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: COLORS.orange,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  redeemBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  redeemBannerTitle: {
+    color: COLORS.white,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  redeemBannerSub: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  redeemBannerArrow: {
+    color: COLORS.white,
+    fontSize: 28,
+    fontWeight: '300',
+    lineHeight: 32,
   },
 });

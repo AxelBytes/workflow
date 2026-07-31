@@ -33,3 +33,11 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Credenciales Firebase Admin — NUNCA subir al repositorio
+firebase-service-account.json
+firebase-service-account*.json
+web/firebase-service-account.json
+**/firebase-service-account*.json
+google-services.json
+GoogleService-Info.plist

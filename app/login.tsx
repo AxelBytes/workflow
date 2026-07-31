@@ -1,17 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuth } from '../hooks/useAuth';
-// import { useGoogleAuth } from '../hooks/useGoogleAuth'; // Deshabilitado temporalmente
+import { useGoogleAuth } from '../hooks/useGoogleAuth';
 import AnimatedLogo from '../components/AnimatedLogo';
 import { Check, Fingerprint } from 'lucide-react-native';
 
+// La contraseña recordada para biometría/autocompletado se guarda cifrada en
+// el Keychain (iOS) / Keystore (Android) vía SecureStore, nunca en
+// AsyncStorage (texto plano, legible por cualquiera con acceso al backup del
+// dispositivo). El email no es sensible por sí solo y se mantiene en
+// AsyncStorage para no perder la conveniencia de autocompletarlo.
+const REMEMBERED_PASSWORD_KEY = 'rememberedPassword';
+
 export default function LoginScreen() {
   const { signIn, loading, error: authError, user } = useAuth();
-  // Google Sign-In deshabilitado temporalmente
-  // const { signInWithGoogle, loading: googleLoading, error: googleError, isReady: googleReady } = useGoogleAuth();
+  const { signInWithGoogle, loading: googleLoading, error: googleError, isReady: googleReady } = useGoogleAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -48,8 +55,17 @@ export default function LoginScreen() {
   useEffect(() => {
     const loadSavedCredentials = async () => {
       try {
+        // Migración única: versiones anteriores guardaban la contraseña en
+        // AsyncStorage (texto plano). La movemos a SecureStore (cifrada) y
+        // borramos el rastro en texto plano.
+        const legacyPassword = await AsyncStorage.getItem('rememberedPassword');
+        if (legacyPassword) {
+          await SecureStore.setItemAsync(REMEMBERED_PASSWORD_KEY, legacyPassword);
+          await AsyncStorage.removeItem('rememberedPassword');
+        }
+
         const savedEmail = await AsyncStorage.getItem('rememberedEmail');
-        const savedPassword = await AsyncStorage.getItem('rememberedPassword');
+        const savedPassword = await SecureStore.getItemAsync(REMEMBERED_PASSWORD_KEY);
         if (savedEmail && savedPassword) {
           setEmail(savedEmail);
           setPassword(savedPassword);
@@ -79,7 +95,7 @@ export default function LoginScreen() {
       if (result.success) {
         // Autenticación biométrica exitosa, hacer login con credenciales guardadas
         const savedEmail = await AsyncStorage.getItem('rememberedEmail');
-        const savedPassword = await AsyncStorage.getItem('rememberedPassword');
+        const savedPassword = await SecureStore.getItemAsync(REMEMBERED_PASSWORD_KEY);
         
         if (savedEmail && savedPassword) {
           setError('');
@@ -119,16 +135,18 @@ export default function LoginScreen() {
     console.log('🔐 Intentando login con:', email.trim());
     
     try {
-      // Guardar o eliminar credenciales según checkbox
+      await signIn(email.trim(), password);
+
+      // Recién guardamos las credenciales DESPUÉS de un login exitoso: antes
+      // se guardaban primero, así que una contraseña mal tipeada quedaba
+      // persistida igual si el login fallaba.
       if (rememberMe) {
         await AsyncStorage.setItem('rememberedEmail', email.trim());
-        await AsyncStorage.setItem('rememberedPassword', password);
+        await SecureStore.setItemAsync(REMEMBERED_PASSWORD_KEY, password);
       } else {
         await AsyncStorage.removeItem('rememberedEmail');
-        await AsyncStorage.removeItem('rememberedPassword');
+        await SecureStore.deleteItemAsync(REMEMBERED_PASSWORD_KEY);
       }
-      
-      await signIn(email.trim(), password);
       // La redirección se hace automáticamente cuando user cambia (useEffect arriba)
       console.log('✅ Login iniciado...');
     } catch (e: any) {
@@ -224,7 +242,33 @@ export default function LoginScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Google Sign-In deshabilitado temporalmente - funciona en producción */}
+            {/* Separador */}
+            <View style={styles.dividerContainer}>
+              <View style={styles.divider} />
+              <Text style={styles.dividerText}>o continúa con</Text>
+              <View style={styles.divider} />
+            </View>
+
+            {/* Botón de Google */}
+            <TouchableOpacity 
+              style={[styles.googleButton, (googleLoading || !googleReady) && styles.buttonDisabled]} 
+              onPress={signInWithGoogle}
+              disabled={googleLoading || !googleReady}
+            >
+              {googleLoading ? (
+                <ActivityIndicator color="#666" />
+              ) : (
+                <>
+                  <Image 
+                    source={{ uri: 'https://www.google.com/favicon.ico' }} 
+                    style={styles.googleIcon}
+                  />
+                  <Text style={styles.googleButtonText}>Google</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            {googleError && <Text style={styles.error}>{googleError}</Text>}
             
             <TouchableOpacity onPress={() => router.push('/register')}>
               <Text style={styles.link}>

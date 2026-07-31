@@ -12,13 +12,11 @@ import {
   getDocs,
   doc,
   getDoc,
-  addDoc,
-  updateDoc,
-  increment,
-  serverTimestamp,
   Timestamp
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, auth } from './firebase';
+
+const WEB_URL = process.env.EXPO_PUBLIC_WEB_URL || '';
 
 // Tipos
 export interface FirebaseProduct {
@@ -125,7 +123,8 @@ class FirebaseSyncService {
    */
   subscribeToPromotions(callback: (promotions: FirebasePromotion[]) => void): () => void {
     console.log('[FirebaseSync] 🎁 Suscribiendo a promociones...');
-    
+    this.unsubscribePromotions?.();
+
     try {
       // Query simple sin orderBy para evitar necesitar índices
       const q = query(
@@ -175,7 +174,8 @@ class FirebaseSyncService {
    */
   subscribeToRaffles(callback: (raffles: FirebaseRaffle[]) => void): () => void {
     console.log('[FirebaseSync] 🎰 Suscribiendo a sorteos...');
-    
+    this.unsubscribeRaffles?.();
+
     try {
       // Query simple sin orderBy para evitar necesitar índices
       const q = query(
@@ -233,7 +233,8 @@ class FirebaseSyncService {
    */
   subscribeToProducts(callback: (products: FirebaseProduct[]) => void): () => void {
     console.log('[FirebaseSync] 📦 Suscribiendo a productos...');
-    
+    this.unsubscribeProducts?.();
+
     try {
       const q = query(
         collection(db, 'products'),
@@ -320,7 +321,8 @@ class FirebaseSyncService {
    */
   subscribeToCustomers(callback: (customers: FirebaseCustomer[]) => void): () => void {
     console.log('[FirebaseSync] 👥 Suscribiendo a clientes...');
-    
+    this.unsubscribeCustomers?.();
+
     try {
       const q = query(collection(db, 'customers'));
 
@@ -432,7 +434,8 @@ class FirebaseSyncService {
   ): () => void {
     const normalizedEmail = email.toLowerCase().trim();
     console.log('[FirebaseSync] 👤 Suscribiendo a datos del cliente:', normalizedEmail);
-    
+    this.unsubscribeCustomerData?.();
+
     try {
       const q = query(
         collection(db, 'customers'),
@@ -488,7 +491,8 @@ class FirebaseSyncService {
     callback: (transactions: FirebaseTransaction[]) => void
   ): () => void {
     console.log('[FirebaseSync] 💳 Suscribiendo a transacciones de:', customerEmail);
-    
+    this.unsubscribeTransactions?.();
+
     try {
       // Query simple sin orderBy para evitar necesitar índices
       const q = query(
@@ -540,79 +544,53 @@ class FirebaseSyncService {
    */
   unsubscribeAll() {
     console.log('[FirebaseSync] 🧹 Limpiando suscripciones...');
-    
-    if (this.unsubscribeProducts) {
-      this.unsubscribeProducts();
-      this.unsubscribeProducts = null;
-    }
-    if (this.unsubscribeCustomers) {
-      this.unsubscribeCustomers();
-      this.unsubscribeCustomers = null;
-    }
-    if (this.unsubscribeTransactions) {
-      this.unsubscribeTransactions();
-      this.unsubscribeTransactions = null;
-    }
+
+    this.unsubscribeProducts?.();
+    this.unsubscribeProducts = null;
+    this.unsubscribeCustomers?.();
+    this.unsubscribeCustomers = null;
+    this.unsubscribeTransactions?.();
+    this.unsubscribeTransactions = null;
+    this.unsubscribePromotions?.();
+    this.unsubscribePromotions = null;
+    this.unsubscribeRaffles?.();
+    this.unsubscribeRaffles = null;
+    this.unsubscribeCustomerData?.();
+    this.unsubscribeCustomerData = null;
   }
 
   /**
-   * Participar en un sorteo
+   * Participar en un sorteo.
+   *
+   * Se resuelve 100% en el servidor (ver web/app/api/raffles/participate):
+   * ahí es donde se valida cupo/estado, se evita duplicados con un ID
+   * determinístico y se descuenta `pointsCost` en la misma transacción. El
+   * cliente ya no escribe directo a `raffles`/`raffleParticipants` (las reglas
+   * de Firestore de hecho ya no lo permiten para el conteo de participantes).
    */
-  async participateInRaffle(
-    raffleId: string,
-    customerId: string,
-    customerEmail: string,
-    customerName: string
-  ): Promise<{ success: boolean; message: string }> {
+  async participateInRaffle(raffleId: string): Promise<{ success: boolean; message: string }> {
     try {
-      console.log('[FirebaseSync] 🎰 Participando en sorteo:', raffleId);
-
-      // Verificar si ya participó
-      const existingQuery = query(
-        collection(db, 'raffleParticipants'),
-        where('raffleId', '==', raffleId),
-        where('customerEmail', '==', customerEmail.toLowerCase().trim())
-      );
-      const existingDocs = await getDocs(existingQuery);
-      
-      if (!existingDocs.empty) {
-        return { success: false, message: 'Ya estás participando en este sorteo' };
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, message: 'Debés iniciar sesión para participar' };
       }
+      const idToken = await user.getIdToken();
 
-      // Verificar el sorteo
-      const raffleRef = doc(db, 'raffles', raffleId);
-      const raffleDoc = await getDoc(raffleRef);
-      
-      if (!raffleDoc.exists()) {
-        return { success: false, message: 'Sorteo no encontrado' };
-      }
-
-      const raffleData = raffleDoc.data();
-      
-      if (raffleData.status !== 'active') {
-        return { success: false, message: 'Este sorteo ya no está activo' };
-      }
-
-      if (raffleData.currentParticipants >= raffleData.maxParticipants) {
-        return { success: false, message: 'El sorteo ya alcanzó el máximo de participantes' };
-      }
-
-      // Agregar participante
-      await addDoc(collection(db, 'raffleParticipants'), {
-        raffleId,
-        customerId,
-        customerEmail: customerEmail.toLowerCase().trim(),
-        customerName,
-        participatedAt: serverTimestamp(),
+      const response = await fetch(`${WEB_URL}/api/raffles/participate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ raffleId }),
       });
 
-      // Incrementar contador de participantes
-      await updateDoc(raffleRef, {
-        currentParticipants: increment(1),
-      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.error || 'No se pudo registrar la participación' };
+      }
 
-      console.log('[FirebaseSync] ✅ Participación registrada');
-      return { success: true, message: '¡Participación registrada exitosamente!' };
+      return { success: true, message: data.message || '¡Participación registrada exitosamente!' };
     } catch (error) {
       console.error('[FirebaseSync] ❌ Error al participar:', error);
       return { success: false, message: 'Error al registrar participación' };
@@ -620,17 +598,16 @@ class FirebaseSyncService {
   }
 
   /**
-   * Verificar si un usuario ya participa en un sorteo
+   * Verificar si el usuario logueado ya participa en un sorteo. Usa el mismo
+   * ID determinístico `${raffleId}_${uid}` que genera el endpoint de
+   * participación, así una sola lectura de documento alcanza (sin query).
    */
-  async isParticipating(raffleId: string, customerEmail: string): Promise<boolean> {
+  async isParticipating(raffleId: string): Promise<boolean> {
     try {
-      const q = query(
-        collection(db, 'raffleParticipants'),
-        where('raffleId', '==', raffleId),
-        where('customerEmail', '==', customerEmail.toLowerCase().trim())
-      );
-      const snapshot = await getDocs(q);
-      return !snapshot.empty;
+      const uid = auth.currentUser?.uid;
+      if (!uid) return false;
+      const snap = await getDoc(doc(db, 'raffleParticipants', `${raffleId}_${uid}`));
+      return snap.exists();
     } catch (error) {
       console.error('[FirebaseSync] ❌ Error verificando participación:', error);
       return false;

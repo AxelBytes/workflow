@@ -1,5 +1,5 @@
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { User, Mail, Phone, LogOut, Settings, HelpCircle, Shield, ChevronRight, Gift, Bell, CreditCard } from 'lucide-react-native';
+import { User, Mail, Phone, LogOut, HelpCircle, Shield, ChevronRight, Gift, Bell } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { auth } from '../../lib/firebase';
 import { signOut } from 'firebase/auth';
@@ -131,17 +131,17 @@ export default function ProfileScreen() {
               </View>
             </View>
             
-            {customer?.phone && (
-              <View style={styles.infoRow}>
-                <View style={styles.infoIconContainer}>
-                  <Phone size={20} color={COLORS.orange} />
-                </View>
-                <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>Teléfono</Text>
-                  <Text style={styles.infoValue}>{customer.phone}</Text>
-                </View>
+            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+              <View style={styles.infoIconContainer}>
+                <Phone size={20} color={COLORS.orange} />
               </View>
-            )}
+              <View style={styles.infoContent}>
+                <Text style={styles.infoLabel}>Teléfono</Text>
+                <Text style={styles.infoValue}>
+                  {customer?.phone || 'Sin cargar — editalo en Privacidad'}
+                </Text>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -150,7 +150,15 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>Configuración</Text>
           
           <View style={styles.optionsCard}>
-            <TouchableOpacity style={styles.optionRow}>
+            <TouchableOpacity
+              style={styles.optionRow}
+              onPress={() =>
+                Alert.alert(
+                  'Notificaciones',
+                  'Las notificaciones se activan al iniciar sesión. Revisá el permiso del sistema en Ajustes del celular si no te llegan.'
+                )
+              }
+            >
               <View style={styles.optionLeft}>
                 <View style={[styles.optionIcon, { backgroundColor: '#FEF3C7' }]}>
                   <Bell size={20} color="#F59E0B" />
@@ -160,17 +168,10 @@ export default function ProfileScreen() {
               <ChevronRight size={20} color={COLORS.gray} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.optionRow}>
-              <View style={styles.optionLeft}>
-                <View style={[styles.optionIcon, { backgroundColor: '#DBEAFE' }]}>
-                  <CreditCard size={20} color="#3B82F6" />
-                </View>
-                <Text style={styles.optionText}>Métodos de Pago</Text>
-              </View>
-              <ChevronRight size={20} color={COLORS.gray} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.optionRow}>
+            <TouchableOpacity
+              style={styles.optionRow}
+              onPress={() => router.push('/privacy-security')}
+            >
               <View style={styles.optionLeft}>
                 <View style={[styles.optionIcon, { backgroundColor: '#E0E7FF' }]}>
                   <Shield size={20} color="#6366F1" />
@@ -180,7 +181,10 @@ export default function ProfileScreen() {
               <ChevronRight size={20} color={COLORS.gray} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.optionRow}>
+            <TouchableOpacity
+              style={[styles.optionRow, { borderBottomWidth: 0 }]}
+              onPress={() => router.push('/help-support')}
+            >
               <View style={styles.optionLeft}>
                 <View style={[styles.optionIcon, { backgroundColor: '#D1FAE5' }]}>
                   <HelpCircle size={20} color="#10B981" />

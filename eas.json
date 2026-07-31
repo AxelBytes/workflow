@@ -1,21 +1,37 @@
 {
   "cli": {
-    "version": ">= 3.0.0"
+    "version": ">= 3.0.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "NODE_ENV": "development",
+        "EXPO_PUBLIC_WEB_URL": "https://eclipse-admin.vercel.app"
+      }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_PUBLIC_WEB_URL": "https://eclipse-admin.vercel.app"
+      },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "credentialsSource": "remote"
       }
     },
     "production": {
+      "autoIncrement": true,
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_PUBLIC_WEB_URL": "https://eclipse-admin.vercel.app"
+      },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "credentialsSource": "remote"
       }
     }
   },
@@ -23,4 +39,3 @@
     "production": {}
   }
 }
-

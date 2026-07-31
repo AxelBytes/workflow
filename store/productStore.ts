@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notificationService } from '../lib/notifications';
-import PushNotificationService from '../lib/pushNotifications';
 
 export interface Product {
   id: string;
@@ -140,15 +139,9 @@ export const useProductStore = create<ProductState>()(
             
             // Verificar si el stock está bajo o agotado
             if (newStock <= 0) {
-              // Notificación local para el dispositivo actual
               notificationService.sendOutOfStockNotification(product.name);
-              // Notificación push al admin
-              PushNotificationService.getInstance().sendOutOfStockNotification(product.name);
             } else if (newStock <= product.lowStockThreshold) {
-              // Notificación local para el dispositivo actual
               notificationService.sendLowStockNotification(product.name, newStock);
-              // Notificación push al admin
-              PushNotificationService.getInstance().sendLowStockNotification(product.name, newStock, product.lowStockThreshold);
             }
             
             return {
@@ -162,21 +155,20 @@ export const useProductStore = create<ProductState>()(
       },
       
       // Promotion actions
-      addPromotion: (promotion: Omit<Promotion, 'id'>) => {
+      addPromotion: (promotion) => {
         const newPromotion: Promotion = {
           ...promotion,
           id: Date.now().toString(),
+          createdAt: new Date(),
         };
 
         set((state) => ({
           promotions: [...state.promotions, newPromotion]
         }));
 
-        // Enviar notificación push de nueva oferta a todos los usuarios
-        PushNotificationService.getInstance().sendNewPromotionNotification(
-          newPromotion.title, 
-          newPromotion.description,
-          newPromotion.id
+        notificationService.sendNewOfferNotification(
+          newPromotion.title,
+          newPromotion.description
         );
       },
       

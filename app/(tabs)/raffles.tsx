@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Image, ActivityIndicator, Alert } from 'react-native';
 import { Award, Calendar, Users, Gift, AlertCircle, Trophy, CheckCircle } from 'lucide-react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useFirebaseRaffles } from '../../hooks/useFirebaseSync';
 import { useAuthContext } from '../../contexts/AuthContext';
 import { firebaseSyncService } from '../../lib/firebaseSync';
@@ -30,32 +30,43 @@ const formatDate = (date: Date) => {
 
 export default function RafflesScreen() {
   const { raffles, loading } = useFirebaseRaffles();
-  const { userEmail, isAuthenticated } = useAuthContext();
+  const { user, isAuthenticated } = useAuthContext();
   const router = useRouter();
   const [participatingIn, setParticipatingIn] = useState<string | null>(null);
   const [myParticipations, setMyParticipations] = useState<Set<string>>(new Set());
+  // Guard síncrono contra doble-tap: setParticipatingIn (state) no se aplica
+  // hasta el siguiente render, así que dos taps rápidos podían disparar dos
+  // participaciones antes de que el botón se deshabilitara.
+  const submittingRef = useRef<string | null>(null);
 
   // Verificar participaciones del usuario
   useEffect(() => {
+    let cancelled = false;
+
     const checkParticipations = async () => {
-      if (!isAuthenticated || !userEmail) return;
-      
+      if (!isAuthenticated || !user) return;
+
       const participations = new Set<string>();
       for (const raffle of raffles) {
-        const isParticipating = await firebaseSyncService.isParticipating(raffle.id, userEmail);
+        const isParticipating = await firebaseSyncService.isParticipating(raffle.id);
         if (isParticipating) {
           participations.add(raffle.id);
         }
       }
-      setMyParticipations(participations);
+      if (!cancelled) {
+        setMyParticipations(participations);
+      }
     };
 
     checkParticipations();
-  }, [raffles, userEmail, isAuthenticated]);
+    return () => {
+      cancelled = true;
+    };
+  }, [raffles, user, isAuthenticated]);
 
   // Función para participar
   const handleParticipate = async (raffleId: string) => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !user) {
       Alert.alert(
         'Iniciar Sesión',
         'Debes iniciar sesión para participar en sorteos',
@@ -67,15 +78,12 @@ export default function RafflesScreen() {
       return;
     }
 
+    if (submittingRef.current === raffleId) return;
+    submittingRef.current = raffleId;
     setParticipatingIn(raffleId);
 
     try {
-      const result = await firebaseSyncService.participateInRaffle(
-        raffleId,
-        userEmail || '',
-        userEmail || '',
-        userEmail?.split('@')[0] || 'Usuario'
-      );
+      const result = await firebaseSyncService.participateInRaffle(raffleId);
 
       if (result.success) {
         setMyParticipations(prev => new Set([...prev, raffleId]));
@@ -84,8 +92,10 @@ export default function RafflesScreen() {
         Alert.alert('Aviso', result.message);
       }
     } catch (error) {
+      console.error('[Raffles] Error al participar:', error);
       Alert.alert('Error', 'No se pudo registrar la participación');
     } finally {
+      submittingRef.current = null;
       setParticipatingIn(null);
     }
   };

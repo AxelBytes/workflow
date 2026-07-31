@@ -27,23 +27,12 @@ export const useAuth = () => {
   // ============================================================================
   // REGISTRAR TOKEN DE NOTIFICACIÓN
   // ============================================================================
-  const registerPushToken = async (userEmail: string) => {
+  const registerPushToken = async (userEmail: string, userId?: string) => {
     try {
-      // En web, saltar registro de notificaciones
-      if (Platform.OS === 'web') {
-        console.log('📱 Push notifications no soportadas en web');
-        return;
-      }
-
-      // Registrar token y guardarlo en Firestore
-      const token = await notificationService.registerForPushNotificationsAsync(userEmail);
-      
-      if (token) {
-        console.log('✅ Token de notificación registrado para:', userEmail);
-      }
-    } catch (error) {
-      // No es crítico - solo logueamos sin bloquear
-      console.log('📱 Notificaciones no disponibles en este entorno');
+      if (Platform.OS === 'web') return;
+      await notificationService.registerForPushNotificationsAsync(userEmail, userId);
+    } catch {
+      // No es crítico
     }
   };
 
@@ -91,12 +80,12 @@ export const useAuth = () => {
       
       // Registrar token de notificación (no bloquear si falla)
       try {
-        await registerPushToken(email);
+        await registerPushToken(email, firebaseUser.uid);
       } catch (pushError) {
         console.log('⚠️ No se pudo registrar push token:', pushError);
       }
       
-      console.log('✅ Usuario autenticado exitosamente:', email);
+      setLoading(false);
       setLoading(false);
       return true; // ✅ Login exitoso
       
@@ -125,34 +114,63 @@ export const useAuth = () => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
       
-      // ✅ CREAR REGISTRO EN LA COLECCIÓN 'customers' DE FIRESTORE
-      // Esto permite que el cajero pueda encontrar al cliente y cargarle puntos
+      // ✅ VINCULAR CUENTA AL PERFIL DNI PRE-EXISTENTE (si el cajero ya cargó puntos)
+      // Si el cliente tiene puntos acumulados de compras previas, este endpoint los migra
       try {
-        const customerRef = doc(db, 'customers', firebaseUser.uid);
-        await setDoc(customerRef, {
-          email: email.toLowerCase().trim(),
-          name: userData?.name || '',
-          dni: userData?.dni || '',
-          phone: '',
-          totalPoints: 0,
-          registeredAt: serverTimestamp(),
-          lastActivity: serverTimestamp(),
-          source: 'mobile_app', // Indica que se registró desde la app
+        const idToken = await firebaseUser.getIdToken();
+        const WEB_URL = process.env.EXPO_PUBLIC_WEB_URL || '';
+
+        const linkRes = await fetch(`${WEB_URL}/api/customers/link-account`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            dni: userData?.dni || '',
+            name: userData?.name || '',
+            email: email.toLowerCase().trim(),
+          }),
         });
-        console.log('✅ Cliente registrado en Firestore');
-      } catch (firestoreError) {
-        console.error('❌ Error al crear cliente en Firestore:', firestoreError);
-        // No fallar el registro si falla Firestore
+
+        if (linkRes.ok) {
+          const linkData = await linkRes.json();
+          if (linkData.pointsMigrated > 0) {
+            console.log(`✅ ${linkData.pointsMigrated} puntos migrados desde perfil DNI`);
+          } else {
+            console.log('✅ Cliente vinculado en Firestore');
+          }
+        } else {
+          throw new Error('link-account falló');
+        }
+      } catch (linkError) {
+        console.error('⚠️ Error al vincular cuenta, creando perfil básico:', linkError);
+        // Fallback: crear perfil básico directo en Firestore
+        try {
+          const customerRef = doc(db, 'customers', firebaseUser.uid);
+          await setDoc(customerRef, {
+            uid: firebaseUser.uid,
+            email: email.toLowerCase().trim(),
+            name: userData?.name || '',
+            dni: userData?.dni?.replace(/\D/g, '') || '',
+            phone: '',
+            totalPoints: 0,
+            linked: true,
+            source: 'mobile_app',
+            nameEditable: false,
+            registeredAt: serverTimestamp(),
+            lastActivity: serverTimestamp(),
+          });
+        } catch (fallbackError) {
+          console.error('❌ Error en fallback Firestore:', fallbackError);
+        }
       }
       
-      // Registrar token de notificación (no bloquear si falla)
+      // Registrar token de notificación con uid para notificaciones dirigidas
       try {
-        await registerPushToken(email);
-      } catch (pushError) {
-        console.log('⚠️ No se pudo registrar push token:', pushError);
-      }
+        await registerPushToken(email, firebaseUser.uid);
+      } catch { /* no crítico */ }
       
-      console.log('✅ Usuario registrado:', email);
       setLoading(false);
       return true;
       
@@ -183,18 +201,28 @@ export const useAuth = () => {
   // ESCUCHAR CAMBIOS DE AUTENTICACIÓN
   // ============================================================================
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser: User | null) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: User | null) => {
       if (firebaseUser) {
+        // Leer el Custom Claim "role" del ID Token para determinar si es admin
+        // Los Custom Claims los asigna el backend con Firebase Admin SDK
+        let isAdmin = false;
+        try {
+          const tokenResult = await firebaseUser.getIdTokenResult();
+          isAdmin = tokenResult.claims.role === 'admin';
+        } catch {
+          isAdmin = false;
+        }
+
         const authUser: AuthUser = {
           uid: firebaseUser.uid,
           email: firebaseUser.email,
-          isAdmin: true, // Temporalmente todos son admin para pruebas
+          isAdmin,
         };
         setUser(authUser);
         
-        // Registrar token cuando el usuario se autentica
+        // Registrar token con uid para que las notificaciones dirigidas funcionen
         if (firebaseUser.email) {
-          registerPushToken(firebaseUser.email);
+          registerPushToken(firebaseUser.email, firebaseUser.uid);
         }
       } else {
         setUser(null);
