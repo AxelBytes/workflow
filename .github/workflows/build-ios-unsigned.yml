@@ -26,7 +26,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install dependencies
         run: npm ci
@@ -34,12 +34,23 @@ jobs:
       - name: Expo prebuild (genera carpeta ios/)
         run: npx expo prebuild --platform ios --no-install
 
-      - name: Patch Podfile para habilitar modular headers
+      - name: Patch Podfile (platform >= 12.0 y modular headers)
         working-directory: ios
         run: |
+          set -euo pipefail
+
+          # Asegurar platform :ios al menos en 12.0
+          if grep -q "^platform :ios" Podfile 2>/dev/null; then
+            perl -0777 -pe "s/platform :ios.*\n/platform :ios, '12.0'\n/" -i Podfile
+          else
+            echo "platform :ios, '12.0'" >> Podfile
+          fi
+
+          # Asegurar que exista la línea use_modular_headers!
           if ! grep -q "use_modular_headers!" Podfile 2>/dev/null; then
             perl -0777 -pe 's/(platform :ios.*\n)/$1use_modular_headers!\n/' -i Podfile || echo "use_modular_headers!" >> Podfile
           fi
+
           echo "Podfile parcheado:"
           sed -n '1,120p' Podfile
 
@@ -61,6 +72,13 @@ jobs:
               xcodebuild -workspace "$WORKSPACE" -list || true
               exit 1
             fi
+
+            PRODUCT_TYPE=$(xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -showBuildSettings 2>/dev/null | awk '/PRODUCT_TYPE/ {print $3; exit}')
+            if [ "$PRODUCT_TYPE" != "com.apple.product-type.application" ]; then
+              echo "::error::El scheme '$SCHEME' no produce una app (PRODUCT_TYPE=$PRODUCT_TYPE)"
+              exit 1
+            fi
+
             echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
             echo "project=" >> "$GITHUB_OUTPUT"
             echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
@@ -81,6 +99,13 @@ jobs:
             xcodebuild -project "$PROJECT" -list || true
             exit 1
           fi
+
+          PRODUCT_TYPE=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null | awk '/PRODUCT_TYPE/ {print $3; exit}')
+          if [ "$PRODUCT_TYPE" != "com.apple.product-type.application" ]; then
+            echo "::error::El scheme '$SCHEME' no produce una app (PRODUCT_TYPE=$PRODUCT_TYPE)"
+            exit 1
+          fi
+
           echo "workspace=" >> "$GITHUB_OUTPUT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
@@ -126,14 +151,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Buscar el .app en cualquier subcarpeta (Release-iphoneos, etc.)
-          APP_PATH=$(find build/Build/Products -name "*.app" -print -quit 2>/dev/null || true)
+          SHOW_SETTINGS_ARGS=()
+          if [ -n "${{ steps.detect.outputs.workspace }}" ]; then
+            SHOW_SETTINGS_ARGS=(-workspace "${{ steps.detect.outputs.workspace }}")
+          else
+            SHOW_SETTINGS_ARGS=(-project "${{ steps.detect.outputs.project }}")
+          fi
+
+          TARGET_BUILD_DIR=$(xcodebuild "${SHOW_SETTINGS_ARGS[@]}" -scheme "${{ steps.detect.outputs.scheme }}" -configuration Release -showBuildSettings 2>/dev/null | awk -F'= ' '/ TARGET_BUILD_DIR/ {print $2; exit}')
+          FULL_PRODUCT_NAME=$(xcodebuild "${SHOW_SETTINGS_ARGS[@]}" -scheme "${{ steps.detect.outputs.scheme }}" -configuration Release -showBuildSettings 2>/dev/null | awk -F'= ' '/ FULL_PRODUCT_NAME/ {print $2; exit}')
+
+          APP_PATH=""
+          if [ -n "${TARGET_BUILD_DIR:-}" ] && [ -n "${FULL_PRODUCT_NAME:-}" ]; then
+            CAND="$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME"
+            [ -d "$CAND" ] && APP_PATH="$CAND"
+          fi
+
+          # Fallback: buscar el .app en cualquier subcarpeta (Release-iphoneos, etc.)
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find build/Build/Products -type d -name "*.app" -print -quit 2>/dev/null || true)
+          fi
           if [ -z "$APP_PATH" ]; then
             APP_PATH=$(find build -type d -name "*.app" -print -quit 2>/dev/null || true)
           fi
 
           if [ -z "${APP_PATH}" ]; then
-            echo "::error::No se encontró ningún .app dentro de build/"
+            echo "::error::No se encontró ningún .app (ver build-xcode.log)"
             echo "Listado de build para debug:"
             find build -maxdepth 6 -print -exec ls -la {} \; || true
             if [ -f build-xcode.log ]; then
