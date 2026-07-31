@@ -34,16 +34,16 @@ jobs:
       - name: Expo prebuild (genera carpeta ios/)
         run: npx expo prebuild --platform ios --no-install
 
-      - name: Patch Podfile (platform >= 12.0 y modular headers)
+      - name: Patch Podfile (platform >= 14.0 y modular headers)
         working-directory: ios
         run: |
           set -euo pipefail
 
-          # Asegurar platform :ios al menos en 12.0
+          # Asegurar platform :ios al menos en 14.0
           if grep -q "^platform :ios" Podfile 2>/dev/null; then
-            perl -0777 -pe "s/platform :ios.*\n/platform :ios, '12.0'\n/" -i Podfile
+            perl -0777 -pe "s/platform :ios.*\n/platform :ios, '14.0'\n/" -i Podfile
           else
-            echo "platform :ios, '12.0'" >> Podfile
+            echo "platform :ios, '14.0'" >> Podfile
           fi
 
           # Asegurar que exista la línea use_modular_headers!
@@ -51,12 +51,41 @@ jobs:
             perl -0777 -pe 's/(platform :ios.*\n)/$1use_modular_headers!\n/' -i Podfile || echo "use_modular_headers!" >> Podfile
           fi
 
+          # Forzar IPHONEOS_DEPLOYMENT_TARGET = 14.0 en todos los Pods.
+          # OJO: el Podfile de Expo ya trae su propio post_install (llama a
+          # react_native_post_install). Ruby/CocoaPods solo guarda el último
+          # bloque post_install definido, así que en vez de agregar uno nuevo
+          # (que pisaría al de Expo) inyectamos el loop DENTRO del existente.
+          if ! grep -q "IPHONEOS_DEPLOYMENT_TARGET'\] = '14.0'" Podfile 2>/dev/null; then
+            if grep -q "post_install do |installer|" Podfile 2>/dev/null; then
+              perl -0777 -pe "s/(post_install do \|installer\|\n)/\$1    installer.pods_project.targets.each do |target|\n      target.build_configurations.each do |config|\n        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'\n      end\n    end\n/" -i Podfile
+            else
+              cat >> Podfile << 'RUBY_EOF'
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+    end
+  end
+end
+RUBY_EOF
+            fi
+          fi
+
           echo "Podfile parcheado:"
-          sed -n '1,120p' Podfile
+          sed -n '1,140p' Podfile
 
       - name: Pod install
         working-directory: ios
         run: pod install --repo-update
+
+      - name: Forzar IPHONEOS_DEPLOYMENT_TARGET = 14.0 en project.pbxproj
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          find . -name "project.pbxproj" -exec sed -i '' \
+            -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g" {} \;
 
       - name: Detectar workspace y scheme
         id: detect
