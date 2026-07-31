@@ -94,27 +94,35 @@ jobs:
           find . -name "project.pbxproj" -exec sed -i '' \
             -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g" {} \;
 
-      - name: Detectar workspace y scheme
+      - name: Detectar workspace y scheme (y validar que sea una app)
         id: detect
         working-directory: ios
         run: |
           set -euo pipefail
-          WORKSPACE=$(ls -d *.xcworkspace 2>/dev/null | head -n 1 || true)
 
+          pick_app_scheme() {
+            local list_cmd="$1"
+            local xcode_cmd="$2"
+            while IFS= read -r scheme; do
+              [ -z "$scheme" ] && continue
+              PRODUCT_TYPE=$($xcode_cmd -scheme "$scheme" -showBuildSettings 2>/dev/null | awk -F'= ' '/PRODUCT_TYPE/ {print $2; exit}' | tr -d '[:space:]' || true)
+              if [ "$PRODUCT_TYPE" = "com.apple.product-type.application" ]; then
+                echo "$scheme"
+                return 0
+              fi
+            done < <(eval "$list_cmd")
+            return 1
+          }
+
+          WORKSPACE=$(ls -d *.xcworkspace 2>/dev/null | head -n 1 || true)
           if [ -n "$WORKSPACE" ]; then
-            SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}' || true)
+            LIST_CMD="xcodebuild -workspace \"$WORKSPACE\" -list 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF{print \$1}'"
+            SCHEME=$(pick_app_scheme "$LIST_CMD" "xcodebuild -workspace \"$WORKSPACE\"") || true
             if [ -z "$SCHEME" ]; then
-              echo "::error::No se encontró ningún scheme dentro del workspace $WORKSPACE"
+              echo "::error::No se encontró ningún scheme de tipo aplicación dentro del workspace $WORKSPACE"
               xcodebuild -workspace "$WORKSPACE" -list || true
               exit 1
             fi
-
-            PRODUCT_TYPE=$(xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -showBuildSettings 2>/dev/null | awk '/PRODUCT_TYPE/ {print $3; exit}')
-            if [ "$PRODUCT_TYPE" != "com.apple.product-type.application" ]; then
-              echo "::error::El scheme '$SCHEME' no produce una app (PRODUCT_TYPE=$PRODUCT_TYPE)"
-              exit 1
-            fi
-
             echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
             echo "project=" >> "$GITHUB_OUTPUT"
             echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
@@ -129,16 +137,11 @@ jobs:
             exit 1
           fi
 
-          SCHEME=$(xcodebuild -project "$PROJECT" -list 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}' || true)
+          LIST_CMD="xcodebuild -project \"$PROJECT\" -list 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF{print \$1}'"
+          SCHEME=$(pick_app_scheme "$LIST_CMD" "xcodebuild -project \"$PROJECT\"") || true
           if [ -z "$SCHEME" ]; then
-            echo "::error::No se encontró ningún scheme dentro del proyecto $PROJECT"
+            echo "::error::No se encontró ningún scheme de tipo aplicación dentro del proyecto $PROJECT"
             xcodebuild -project "$PROJECT" -list || true
-            exit 1
-          fi
-
-          PRODUCT_TYPE=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null | awk '/PRODUCT_TYPE/ {print $3; exit}')
-          if [ "$PRODUCT_TYPE" != "com.apple.product-type.application" ]; then
-            echo "::error::El scheme '$SCHEME' no produce una app (PRODUCT_TYPE=$PRODUCT_TYPE)"
             exit 1
           fi
 
